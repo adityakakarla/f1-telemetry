@@ -1,17 +1,21 @@
+mod f1;
+
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
+use f1::hamilton::{CarData, fetch_car_data};
 
 struct MyApp {
-    name: String,
-    age: u32,
+    car_data: Vec<CarData>,
 }
 
-impl Default for MyApp {
-    fn default() -> Self {
-        Self {
-            name: "Arthur".to_owned(),
-            age: 42,
-        }
+impl MyApp {
+    fn new() -> Self {
+        let car_data = fetch_car_data().unwrap_or_else(|e| {
+            eprintln!("Error fetching car data: {e:?}");
+            vec![]
+        });
+        println!("{}", car_data.len());
+        Self { car_data }
     }
 }
 
@@ -20,23 +24,12 @@ impl eframe::App for MyApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Lewis Hamilton");
 
-            // Sample F1 speed telemetry over a lap (time in seconds, speed in km/h)
-            let speed_data: Vec<[f64; 2]> = vec![
-                [0.0, 0.0],
-                [2.0, 120.0],
-                [5.0, 280.0],
-                [10.0, 310.0],
-                [15.0, 295.0],
-                [20.0, 80.0], // braking zone
-                [22.0, 60.0], // corner
-                [25.0, 200.0],
-                [30.0, 320.0],
-                [35.0, 315.0],
-                [40.0, 70.0], // braking zone
-                [43.0, 55.0], // corner
-                [47.0, 240.0],
-                [52.0, 330.0],
-            ];
+            let speed_data: Vec<[f64; 2]> = self
+                .car_data
+                .iter()
+                .enumerate()
+                .filter_map(|(i, d)| d.speed.map(|s| [i as f64, s as f64]))
+                .collect();
 
             let speed_line = Line::new("Speed (km/h)", PlotPoints::new(speed_data.clone()));
             let speed_points =
@@ -66,6 +59,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "F1 Telemetry",
         options,
-        Box::new(|_cc| Ok(Box::new(MyApp::default()))),
+        Box::new(|_cc| Ok(Box::new(MyApp::new()))),
     )
 }
