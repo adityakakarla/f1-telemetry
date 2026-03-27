@@ -3,55 +3,20 @@ mod f1;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use f1::car_data::{CarData, fetch_car_data};
+use f1::drivers::{Driver, fetch_drivers};
 use f1::sessions::{Session, fetch_sessions};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-struct Driver {
-    name: &'static str,
-    number: u32,
-}
-
-const DRIVERS: &[Driver] = &[
-    Driver { name: "Max Verstappen", number: 1 },
-    Driver { name: "Oscar Piastri", number: 4 },
-    Driver { name: "Gabriel Bortoleto", number: 5 },
-    Driver { name: "Isack Hadjar", number: 6 },
-    Driver { name: "Pierre Gasly", number: 10 },
-    Driver { name: "Sergio Pérez", number: 11 },
-    Driver { name: "Andrea Kimi Antonelli", number: 12 },
-    Driver { name: "Fernando Alonso", number: 14 },
-    Driver { name: "Charles Leclerc", number: 16 },
-    Driver { name: "Lance Stroll", number: 18 },
-    Driver { name: "Alexander Albon", number: 23 },
-    Driver { name: "Nico Hülkenberg", number: 27 },
-    Driver { name: "Liam Lawson", number: 30 },
-    Driver { name: "Esteban Ocon", number: 31 },
-    Driver { name: "Arvid Lindblad", number: 41 },
-    Driver { name: "Franco Colapinto", number: 43 },
-    Driver { name: "Lewis Hamilton", number: 44 },
-    Driver { name: "Carlos Sainz", number: 55 },
-    Driver { name: "George Russell", number: 63 },
-    Driver { name: "Valtteri Bottas", number: 77 },
-    Driver { name: "Lando Norris", number: 81 },
-    Driver { name: "Oliver Bearman", number: 87 },
-];
-
-fn driver_color(number: u32) -> egui::Color32 {
-    match number {
-        81 | 4 => egui::Color32::from_rgb(255, 128, 0),    // McLaren orange
-        44 | 16 => egui::Color32::from_rgb(220, 0, 0),     // Ferrari red
-        1 | 6 => egui::Color32::from_rgb(30, 65, 255),     // Red Bull blue
-        63 | 12 => egui::Color32::from_rgb(0, 210, 190),   // Mercedes teal
-        55 | 23 => egui::Color32::from_rgb(0, 130, 250),   // Williams blue
-        30 | 41 => egui::Color32::from_rgb(100, 145, 255), // Racing Bulls
-        14 | 18 => egui::Color32::from_rgb(0, 160, 100),   // Aston Martin green
-        87 | 31 => egui::Color32::from_rgb(180, 180, 180), // Haas gray
-        27 | 5 => egui::Color32::from_rgb(150, 20, 20),    // Audi dark red
-        10 | 43 => egui::Color32::from_rgb(255, 0, 145),   // Alpine pink
-        11 | 77 => egui::Color32::from_rgb(200, 200, 255), // Cadillac
-        _ => egui::Color32::WHITE,
-    }
+fn team_color(hex: Option<&str>) -> egui::Color32 {
+    let hex = match hex {
+        Some(h) if h.len() == 6 => h,
+        _ => return egui::Color32::WHITE,
+    };
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+    egui::Color32::from_rgb(r, g, b)
 }
 
 fn session_label(session: &Session) -> String {
@@ -78,7 +43,10 @@ struct MyApp {
     sessions_loading: bool,
     sessions_rx: Option<Receiver<Vec<Session>>>,
 
+    drivers: Vec<Driver>,
     selected_driver_idx: usize,
+    drivers_loading: bool,
+    drivers_rx: Option<Receiver<Vec<Driver>>>,
 
     car_data: Vec<CarData>,
     data_loading: bool,
@@ -95,7 +63,10 @@ impl MyApp {
             selected_session_idx: 0,
             sessions_loading: false,
             sessions_rx: None,
-            selected_driver_idx: DRIVERS.iter().position(|d| d.number == 44).unwrap_or(0),
+            drivers: vec![],
+            selected_driver_idx: 0,
+            drivers_loading: false,
+            drivers_rx: None,
             car_data: vec![],
             data_loading: false,
             data_rx: None,
@@ -113,6 +84,7 @@ impl MyApp {
 
     fn trigger_sessions_fetch(&mut self) {
         self.sessions = vec![];
+        self.drivers = vec![];
         self.car_data = vec![];
         self.sessions_loading = true;
         self.sessions_rx = None;
@@ -124,12 +96,28 @@ impl MyApp {
         });
     }
 
-    fn trigger_data_fetch(&mut self) {
+    fn trigger_drivers_fetch(&mut self) {
         if self.sessions.is_empty() {
             return;
         }
         let session_key = self.sessions[self.selected_session_idx].session_key;
-        let driver_number = DRIVERS[self.selected_driver_idx].number;
+        self.drivers = vec![];
+        self.car_data = vec![];
+        self.drivers_loading = true;
+        self.drivers_rx = None;
+        let (tx, rx) = mpsc::channel();
+        self.drivers_rx = Some(rx);
+        thread::spawn(move || {
+            let _ = tx.send(fetch_drivers(session_key));
+        });
+    }
+
+    fn trigger_data_fetch(&mut self) {
+        if self.sessions.is_empty() || self.drivers.is_empty() {
+            return;
+        }
+        let session_key = self.sessions[self.selected_session_idx].session_key;
+        let driver_number = self.drivers[self.selected_driver_idx].driver_number;
         self.car_data = vec![];
         self.data_loading = true;
         self.data_rx = None;
@@ -153,6 +141,24 @@ impl MyApp {
                 self.sessions_rx = None;
                 if !self.sessions.is_empty() {
                     self.selected_session_idx = self.sessions.len() - 1;
+                    self.trigger_drivers_fetch();
+                }
+            }
+        }
+    }
+
+    fn poll_drivers(&mut self, ctx: &egui::Context) {
+        if !self.drivers_loading {
+            return;
+        }
+        ctx.request_repaint();
+        if let Some(rx) = &self.drivers_rx {
+            if let Ok(drivers) = rx.try_recv() {
+                self.drivers = drivers;
+                self.drivers_loading = false;
+                self.drivers_rx = None;
+                if !self.drivers.is_empty() {
+                    self.selected_driver_idx = 0;
                     self.trigger_data_fetch();
                 }
             }
@@ -177,10 +183,11 @@ impl MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_sessions(ctx);
+        self.poll_drivers(ctx);
         self.poll_data(ctx);
 
-        // Flags set inside closures, acted on after all borrows are released
         let mut reload_sessions = false;
+        let mut reload_drivers = false;
         let mut reload_data = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -210,7 +217,7 @@ impl eframe::App for MyApp {
                     ui.label("No sessions found");
                 } else {
                     let label = session_label(&self.sessions[self.selected_session_idx]);
-                    let prev_session = self.selected_session_idx;
+                    let prev = self.selected_session_idx;
                     egui::ComboBox::from_id_salt("session_select")
                         .selected_text(label)
                         .width(280.0)
@@ -223,31 +230,35 @@ impl eframe::App for MyApp {
                                 );
                             }
                         });
-                    if self.selected_session_idx != prev_session {
-                        reload_data = true;
+                    if self.selected_session_idx != prev {
+                        reload_drivers = true;
                     }
                 }
 
                 // Driver selector
-                let driver_label = format!(
-                    "{} ({})",
-                    DRIVERS[self.selected_driver_idx].name,
-                    DRIVERS[self.selected_driver_idx].number,
-                );
-                let prev_driver = self.selected_driver_idx;
-                egui::ComboBox::from_id_salt("driver_select")
-                    .selected_text(driver_label)
-                    .show_ui(ui, |ui| {
-                        for (i, driver) in DRIVERS.iter().enumerate() {
-                            ui.selectable_value(
-                                &mut self.selected_driver_idx,
-                                i,
-                                format!("{} ({})", driver.name, driver.number),
-                            );
-                        }
-                    });
-                if self.selected_driver_idx != prev_driver {
-                    reload_data = true;
+                if self.drivers_loading {
+                    ui.spinner();
+                    ui.label("Loading drivers…");
+                } else if self.drivers.is_empty() {
+                    ui.label("No drivers found");
+                } else {
+                    let d = &self.drivers[self.selected_driver_idx];
+                    let label = format!("{} ({})", d.full_name, d.driver_number);
+                    let prev = self.selected_driver_idx;
+                    egui::ComboBox::from_id_salt("driver_select")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            for (i, driver) in self.drivers.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut self.selected_driver_idx,
+                                    i,
+                                    format!("{} ({})", driver.full_name, driver.driver_number),
+                                );
+                            }
+                        });
+                    if self.selected_driver_idx != prev {
+                        reload_data = true;
+                    }
                 }
             });
 
@@ -274,7 +285,12 @@ impl eframe::App for MyApp {
                 ui.add_space(20.0);
                 ui.label("No data available for this driver/session.");
             } else {
-                let color = driver_color(DRIVERS[self.selected_driver_idx].number);
+                let color = self
+                    .drivers
+                    .get(self.selected_driver_idx)
+                    .and_then(|d| d.team_colour.as_deref())
+                    .map(|hex| team_color(Some(hex)))
+                    .unwrap_or(egui::Color32::WHITE);
 
                 Plot::new("Telemetry")
                     .legend(Legend::default().title("Channels"))
@@ -344,9 +360,10 @@ impl eframe::App for MyApp {
             }
         });
 
-        // Trigger fetches after closures have released their borrows
         if reload_sessions {
             self.trigger_sessions_fetch();
+        } else if reload_drivers {
+            self.trigger_drivers_fetch();
         } else if reload_data {
             self.trigger_data_fetch();
         }
