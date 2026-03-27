@@ -15,10 +15,12 @@ pub struct CarData {
     pub throttle: Option<u32>,
 }
 
-pub fn fetch_car_data() -> Result<Vec<CarData>> {
-    println!("Fetching data");
-    let url = "https://api.openf1.org/v1/car_data?driver_number=44&session_key=latest";
-    let data = reqwest::blocking::get(url)?.json::<Vec<CarData>>()?;
+pub fn fetch_car_data(driver_number: u32) -> Result<Vec<CarData>> {
+    println!("Fetching data for driver {driver_number}");
+    let url = format!(
+        "https://api.openf1.org/v1/car_data?driver_number={driver_number}&session_key=latest"
+    );
+    let data = reqwest::blocking::get(&url)?.json::<Vec<CarData>>()?;
     println!("Finished fetching data");
     Ok(data)
 }
