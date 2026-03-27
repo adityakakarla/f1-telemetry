@@ -1153,6 +1153,7 @@ dependencies = [
  "env_logger",
  "reqwest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

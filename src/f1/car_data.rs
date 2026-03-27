@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
+use serde_json;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CarData {
@@ -15,12 +16,13 @@ pub struct CarData {
     pub throttle: Option<u32>,
 }
 
-pub fn fetch_car_data(driver_number: u32) -> Result<Vec<CarData>> {
-    println!("Fetching data for driver {driver_number}");
+pub fn fetch_car_data(driver_number: u32, session_key: u32) -> Result<Vec<CarData>> {
+    println!("Fetching data for driver {driver_number}, session {session_key}");
     let url = format!(
-        "https://api.openf1.org/v1/car_data?driver_number={driver_number}&session_key=latest"
+        "https://api.openf1.org/v1/car_data?driver_number={driver_number}&session_key={session_key}"
     );
-    let data = reqwest::blocking::get(&url)?.json::<Vec<CarData>>()?;
-    println!("Finished fetching data");
+    let bytes = reqwest::blocking::get(&url)?.bytes()?;
+    let data = serde_json::from_slice::<Vec<CarData>>(&bytes).unwrap_or_default();
+    println!("Finished fetching data ({} points)", data.len());
     Ok(data)
 }
